@@ -14,14 +14,13 @@ impl User {
 }
 
 impl Segment for User {
-    fn bg(&mut self) -> Color {
-        if self.is_root {
-            Color::from_rgb(255, 30, 30)
-        } else {
-            Color::from_rgb(30, 30, 255)
-        }
-    }
     fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+        let bg = if self.is_root {
+            Color::from_rgb(200, 30, 30)
+        } else {
+            Color::from_rgb(60, 100, 100)
+        };
+        w.set_bg(bg)?;
         w.set_fg(Color::from_rgb(230, 230, 230))?;
         // write!(w, " 👤 ")?;
         write!(w, " ")?;

@@ -2,16 +2,20 @@ use crate::{Color, ColoredStream, Segment};
 use git2::{Branch, BranchType, ErrorClass, ErrorCode, Repository, Status};
 use std::io::Write as _;
 
-pub struct Git {
-    repo: Result<Repo, git2::Error>,
+pub struct Git(Option<GitInner>);
+
+pub struct GitInner {
+    state: Result<State, git2::Error>,
+    statuses: Result<Statuses, git2::Error>,
 }
 
+#[derive(Debug, Clone, Copy)]
 struct Upstream {
     ahead: u8,
     behind: u8,
 }
 
-enum RepoState {
+enum State {
     Detached(git2::Buf),
     OnBranch {
         name: String,
@@ -20,17 +24,63 @@ enum RepoState {
     Empty,
 }
 
-#[derive(Debug)]
-struct Statuses {
-    conflicted: u8,
-    untracked: u8,
-    not_staged: u8,
-    staged: u8,
+macro_rules! impl_status {
+    ($name:ident, $r:literal, $g:literal, $b:literal, $format:literal) => {
+        #[derive(Debug)]
+        struct $name(u8);
+        impl Segment for $name {
+            fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+                if self.0 > 0 {
+                    w.set_fg(Color::from_rgb(0, 0, 0))?;
+                    // w.set_fg(Color::from_rgb($r, $g, $b))?;
+                    if self.0 < 99 {
+                        write!(w, $format, self.0)?;
+                    } else {
+                        write!(w, $format, "99+")?;
+                    }
+                }
+                Ok(())
+            }
+        }
+    };
 }
 
-struct Repo {
-    state: RepoState,
-    repo: git2::Repository,
+impl_status!(Staged, 0, 100, 0, " {}✓ ");
+impl_status!(NotStaged, 0, 0, 255, " {}* ");
+impl_status!(Untracked, 0, 0, 0, " {}⁺ ");
+impl_status!(Conflicted, 180, 0, 0, " {}💔 ");
+
+#[derive(Debug)]
+struct Statuses {
+    staged: Staged,
+    not_staged: NotStaged,
+    untracked: Untracked,
+    conflicted: Conflicted,
+}
+
+impl Segment for Statuses {
+    fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+        if self.staged.0 > 0
+            || self.not_staged.0 > 0
+            || self.untracked.0 > 0
+            || self.conflicted.0 > 0
+        {
+            w.start_segment(Color::from_rgb(200, 200, 200))?;
+            if self.staged.0 > 0 {
+                self.staged.write(w)?;
+            }
+            if self.not_staged.0 > 0 {
+                self.not_staged.write(w)?;
+            }
+            if self.untracked.0 > 0 {
+                self.untracked.write(w)?;
+            }
+            if self.conflicted.0 > 0 {
+                self.conflicted.write(w)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub fn get_head_branch(repo: &git2::Repository) -> Result<Option<Branch>, git2::Error> {
@@ -44,12 +94,12 @@ pub fn get_head_branch(repo: &git2::Repository) -> Result<Option<Branch>, git2::
     Ok(None)
 }
 
-fn get_state(repo: &git2::Repository) -> Result<RepoState, git2::Error> {
+fn get_state(repo: &git2::Repository) -> Result<State, git2::Error> {
     if repo.head_detached()? {
         let head = repo.head()?;
         let target = head.peel(git2::ObjectType::Any)?;
         let short_id = target.short_id()?;
-        Ok(RepoState::Detached(short_id))
+        Ok(State::Detached(short_id))
     } else if let Some(branch) = get_head_branch(&repo)? {
         let local = branch.get().target().ok_or(git2::Error::new(
             ErrorCode::NotFound,
@@ -66,12 +116,12 @@ fn get_state(repo: &git2::Repository) -> Result<RepoState, git2::Error> {
         } else {
             None
         };
-        Ok(RepoState::OnBranch {
+        Ok(State::OnBranch {
             name: String::from_utf8_lossy(branch.name_bytes()?).into_owned(),
             upstream,
         })
     } else {
-        Ok(RepoState::Empty)
+        Ok(State::Empty)
     }
 }
 
@@ -112,100 +162,84 @@ fn get_statuses(git: &Repository) -> Result<Statuses, git2::Error> {
         }
     }
     Ok(Statuses {
-        conflicted,
-        untracked,
-        not_staged,
-        staged,
+        conflicted: Conflicted(conflicted),
+        untracked: Untracked(untracked),
+        not_staged: NotStaged(not_staged),
+        staged: Staged(staged),
     })
 }
 
 impl Git {
-    pub fn new() -> Option<Self> {
+    pub fn new() -> Self {
         let repo = match git2::Repository::discover(".") {
-            Err(_) => return None,
+            Err(_) => return Self(None),
             Ok(repo) => repo,
         };
 
-        let repo = get_state(&repo).and_then(|state| Ok(Repo { state, repo }));
-        Some(Git { repo })
+        let state = get_state(&repo);
+        let statuses = get_statuses(&repo);
+        Self(Some(GitInner { state, statuses }))
     }
 }
 
 impl Segment for Git {
-    fn bg(&mut self) -> Color {
-        let repo = match self.repo {
-            Ok(ref state) => state,
-            Err(_) => return Color::from_rgb(255, 0, 0),
-        };
-        match repo.state {
-            RepoState::Detached(_) => Color::from_rgb(0, 0, 180),
-            RepoState::OnBranch { upstream: None, .. } => Color::from_rgb(180, 0, 0),
-            RepoState::OnBranch {
-                upstream: Some(_), ..
-            } => Color::from_rgb(0, 180, 0),
-            RepoState::Empty => Color::from_rgb(255, 255, 255),
-        }
-    }
-
     fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
-        w.set_fg(Color::from_rgb(230, 230, 230))?;
-        let repo = match self.repo {
-            Ok(ref state) => state,
-            Err(_) => return write!(w, " ☠ "),
+        let inner = match self.0 {
+            None => return Ok(()),
+            Some(ref mut inner) => inner,
         };
-        match repo.state {
-            RepoState::Detached(ref short_id) => {
-                write!(w, " 📤 {} ", String::from_utf8_lossy(&*short_id))
+        let state = match inner.state {
+            Ok(ref state) => state,
+            Err(_) => {
+                w.set_bg(Color::from_rgb(255, 0, 0))?;
+                return write!(w, " ☠ ");
             }
-            RepoState::OnBranch {
-                upstream: None,
-                ref name,
-            } => write!(w, " ⭠ {} ", name),
-            RepoState::OnBranch {
-                upstream: Some(Upstream { ahead, behind, .. }),
-                ref name,
-            } => write!(w, " ⭠ {} {}⬆/{}⬇ ", name, ahead, behind),
-            RepoState::Empty => write!(w, " ∅  no commits "),
+        };
+        match state {
+            State::Detached(ref short_id) => {
+                w.set_bg(Color::from_rgb(0, 0, 180))?;
+                w.set_fg(Color::from_rgb(230, 230, 230))?;
+                write!(w, " 📤 {} ", String::from_utf8_lossy(&*short_id))?;
+            }
+            &State::OnBranch { upstream, ref name } => {
+                w.set_bg(Color::from_rgb(30, 180, 30))?;
+                w.set_fg(Color::from_rgb(0, 0, 0))?;
+                write!(w, " ⭠ {} ", name)?;
+                if let Some(Upstream { ahead, behind }) = upstream {
+                    if behind > 0 {
+                        w.start_segment(Color::from_rgb(120, 30, 30))?;
+                    } else if ahead > 0 {
+                        w.start_segment(Color::from_rgb(120, 30, 120))?;
+                    } else {
+                        w.start_segment(Color::from_rgb(30, 30, 30))?;
+                    }
+                    w.set_fg(Color::from_rgb(230, 230, 230))?;
+                    write!(w, " {}🔺 {}🔻", ahead, behind)?;
+                }
+            }
+            State::Empty => {
+                w.set_bg(Color::from_rgb(255, 255, 255))?;
+                w.set_fg(Color::from_rgb(0, 0, 0))?;
+                write!(w, " ∅  no commits ")?;
+            }
         }
-    }
-}
-
-pub struct GitStatus {
-    statuses: Result<Statuses, git2::Error>,
-}
-
-impl GitStatus {
-    pub fn new(git: &Git) -> Option<Self> {
-        match git.repo {
-            Ok(ref repo) => Some(Self {
-                statuses: get_statuses(&repo.repo),
-            }),
-            Err(_) => None,
+        match inner.statuses {
+            Ok(ref mut statuses) => {
+                statuses.write(w)?;
+            }
+            Err(_) => {
+                w.set_bg(Color::from_rgb(255, 0, 0))?;
+                write!(w, " ☠ ")?;
+            }
         }
+        Ok(())
     }
 }
 
 // '🏷' tag
 // '🫂' merge
-impl Segment for GitStatus {
-    fn bg(&mut self) -> Color {
-        match self.statuses {
-            Ok(ref state) => state,
-            Err(_) => return Color::from_rgb(255, 0, 0),
-        };
-        Color::from_rgb(0, 0, 0)
-    }
-
-    fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
-        let statuses = match self.statuses {
-            Ok(ref state) => state,
-            Err(_) => return write!(w, " ☠ "),
-        };
-        w.set_fg(Color::from_rgb(230, 230, 230))?;
-        write!(
-            w,
-            " {}✅  {}🖍  {}❓ {}💔 ",
-            statuses.staged, statuses.not_staged, statuses.untracked, statuses.conflicted
-        )
-    }
-}
+// write!(
+//     w,
+//     " {}✅  {}🖍  {}❓ {}💔 ",
+//     statuses.staged, statuses.not_staged, statuses.untracked, statuses.conflicted
+// )

@@ -6,7 +6,7 @@ use kubeconfig_error::ConfigError;
 use std::{env, io::Write, path::Path};
 
 pub struct K8s {
-    server_name: kubeconfig::Result<String>,
+    server_name: Option<kubeconfig::Result<String>>,
 }
 
 fn servername_from_kubeconfig<P: AsRef<Path>>(path: P) -> kubeconfig::Result<String> {
@@ -56,37 +56,41 @@ fn servername_from_kubeconfig<P: AsRef<Path>>(path: P) -> kubeconfig::Result<Str
 }
 
 impl K8s {
-    pub fn new() -> Option<Self> {
+    pub fn new() -> Self {
         if let Some(kubeconfig_path) = env::var_os("KUBECONFIG") {
-            Some(Self {
-                server_name: servername_from_kubeconfig(kubeconfig_path),
-            })
+            Self {
+                server_name: Some(servername_from_kubeconfig(kubeconfig_path)),
+            }
         } else {
-            dirs::home_dir().and_then(|home| {
-                servername_from_kubeconfig(home.join(".kube").join("config"))
-                    .ok()
-                    .map(|server_name| Self {
-                        server_name: Ok(server_name),
-                    })
-            })
+            dirs::home_dir()
+                .and_then(|home| {
+                    servername_from_kubeconfig(home.join(".kube").join("config"))
+                        .ok()
+                        .map(|server_name| Self {
+                            server_name: Some(Ok(server_name)),
+                        })
+                })
+                .unwrap_or(Self { server_name: None })
         }
     }
 }
 
 impl Segment for K8s {
-    fn bg(&mut self) -> Color {
-        match self.server_name {
-            Ok(_) => Color::from_rgb(10, 10, 255),
-            Err(_) => Color::from_rgb(255, 0, 0),
-        }
-    }
-
     fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
-        let server_name = match self.server_name {
-            Ok(ref server_name) => server_name,
-            Err(_) => return write!(w, " ☠ "),
-        };
-        w.set_fg(Color::from_rgb(230, 230, 230))?;
-        write!(w, " ☸  {} ", server_name)
+        if let Some(ref server_name) = self.server_name {
+            match server_name {
+                Ok(server_name) => {
+                    w.set_bg(Color::from_rgb(10, 10, 200))?;
+                    w.set_fg(Color::from_rgb(230, 230, 230))?;
+                    write!(w, " ☸  {} ", server_name)?;
+                }
+                Err(_) => {
+                    w.set_bg(Color::from_rgb(255, 0, 0))?;
+                    w.set_fg(Color::from_rgb(230, 230, 230))?;
+                    write!(w, " ☠ ")?;
+                }
+            }
+        }
+        Ok(())
     }
 }

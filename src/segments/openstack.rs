@@ -3,26 +3,27 @@ use std::{env, io::Write as _};
 use crate::{Color, ColoredStream, Segment};
 
 pub struct Openstack {
-    project_name: String,
+    project_name: Option<String>,
 }
 
 impl Openstack {
-    pub fn new() -> Option<Self> {
+    pub fn new() -> Self {
         env::var_os("OS_PROJECT_NAME")
             .or_else(|| env::var_os("OS_TENANT_NAME"))
-            .map(|val| Self {
-                project_name: val.to_string_lossy().into_owned(),
+            .map(|project_name| Self {
+                project_name: Some(project_name.to_string_lossy().into_owned()),
             })
+            .unwrap_or(Self { project_name: None })
     }
 }
 
 impl Segment for Openstack {
-    fn bg(&mut self) -> Color {
-        Color::from_rgb(50, 50, 255)
-    }
-
     fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
-        w.set_fg(Color::from_rgb(200, 200, 255))?;
-        write!(w, " ⏹  {} ", self.project_name)
+        if let Some(ref project_name) = self.project_name {
+            w.set_bg(Color::from_rgb(80, 80, 255))?;
+            w.set_fg(Color::from_rgb(255, 255, 255))?;
+            write!(w, " ⏹  {} ", project_name)?;
+        }
+        Ok(())
     }
 }

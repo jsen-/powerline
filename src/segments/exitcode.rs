@@ -12,8 +12,8 @@ impl ExitCode {
 }
 
 impl Segment for ExitCode {
-    fn bg(&mut self) -> Color {
-        if let Some(code) = self.code {
+    fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+        let bg = if let Some(code) = self.code {
             if code == 0 {
                 Color::from_rgb(0, 100, 0)
             } else {
@@ -21,12 +21,11 @@ impl Segment for ExitCode {
             }
         } else {
             Color::from_rgb(0, 0, 100)
-        }
-    }
-    fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+        };
+        w.set_bg(bg)?;
         w.set_fg(Color::from_rgb(200, 200, 200))?;
         match self.code {
-            Some(0) | None => write!(w, " "),
+            Some(0) | None => write!(w, "   "),
             Some(code) => write!(w, " {} ", code),
         }
     }

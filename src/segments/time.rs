@@ -5,10 +5,8 @@ use std::io::Write as _;
 pub struct Time;
 
 impl Segment for Time {
-    fn bg(&mut self) -> Color {
-        Color::from_rgb(80, 80, 80)
-    }
     fn write(&mut self, w: &mut ColoredStream) -> std::io::Result<()> {
+        w.set_bg(Color::from_rgb(80, 80, 80))?;
         w.set_fg(Color::from_rgb(200, 200, 200))?;
         let time = chrono::Local::now().time();
 
