@@ -60,7 +60,7 @@ fn main() -> io::Result<()> {
     let mut stdout_lock = stdout_.lock();
     let mut stream = ColoredStream::new(&mut stdout_lock);
 
-    let segments = std::array::IntoIter::new(segments);
+    let segments = segments.into_iter();
     for segment in segments {
         stream.write_segment(segment)?;
     }
