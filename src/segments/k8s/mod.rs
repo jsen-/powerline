@@ -7,6 +7,7 @@ use std::{env, io::Write, path::Path};
 
 pub struct K8s {
     server_name: Option<kubeconfig::Result<String>>,
+    mgr_name: Option<kubeconfig::Result<String>>,
 }
 
 fn servername_from_kubeconfig<P: AsRef<Path>>(path: P) -> kubeconfig::Result<String> {
@@ -57,20 +58,31 @@ fn servername_from_kubeconfig<P: AsRef<Path>>(path: P) -> kubeconfig::Result<Str
 
 impl K8s {
     pub fn new() -> Self {
-        if let Some(kubeconfig_path) = env::var_os("KUBECONFIG") {
-            Self {
-                server_name: Some(servername_from_kubeconfig(kubeconfig_path)),
-            }
+        let mgr_name = std::env::var_os("MGR_KUBECONFIG").map(|path| {
+            let mgr = servername_from_kubeconfig(path)?;
+            Ok(mgr
+                .trim()
+                .strip_prefix("https://kube.")
+                .and_then(|rest| {
+                    rest.strip_suffix(".caas.in.pan-net.eu:6443")
+                        .map(str::to_string)
+                })
+                .unwrap_or(mgr))
+        });
+        let server_name = if let Some(kubeconfig_path) = env::var_os("KUBECONFIG") {
+            Some(servername_from_kubeconfig(kubeconfig_path))
         } else {
             dirs::home_dir()
                 .and_then(|home| {
                     servername_from_kubeconfig(home.join(".kube").join("config"))
                         .ok()
-                        .map(|server_name| Self {
-                            server_name: Some(Ok(server_name)),
-                        })
+                        .map(|server_name| Some(Ok(server_name)))
                 })
-                .unwrap_or(Self { server_name: None })
+                .unwrap_or(None)
+        };
+        Self {
+            server_name,
+            mgr_name,
         }
     }
 }
@@ -90,6 +102,18 @@ impl Segment for K8s {
                     write!(w, " ☠ ")?;
                 }
             }
+        }
+        match self.mgr_name {
+            Some(Ok(ref mgr_name)) => {
+                w.start_segment(Color::from_rgb(180, 180, 0))?;
+                w.set_fg(Color::from_rgb(0, 0, 0))?;
+                write!(w, " {mgr_name} ")?;
+            }
+            Some(Err(_)) => {
+                w.start_segment(Color::from_rgb(255, 0, 0))?;
+                write!(w, " ??? ")?;
+            }
+            None => {}
         }
         Ok(())
     }
